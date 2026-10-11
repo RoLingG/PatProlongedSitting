@@ -1,0 +1,23 @@
+# ---- 构建产物 ----
+build/bin/
+*.exe
+*.app
+*.exe~
+
+# ---- 文档 ----
+docs
+
+# ---- 前端 ----
+node_modules/
+frontend/dist/
+frontend/wailsjs/
+frontend/package.json.md5
+
+# ---- IDE / 编辑器 ----
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---- 备份 ----
+*.bak

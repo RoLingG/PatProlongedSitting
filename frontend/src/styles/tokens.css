@@ -1,0 +1,145 @@
+/**
+ * 设计令牌（Design Tokens）
+ *
+ * 严格对齐 Clay 设计系统（docs/clay/DESIGN.md）：
+ *  - 奶油色画布 + 深墨色主按钮 + 饱和度高的单色功能卡
+ *  - 展示字体走「圆润实心 + 负字距」，正文走无衬线标准字重
+ *  - 圆角慷慨：按钮 12px / 内容卡 16px / 功能卡 24px
+ *
+ * 动效统一由 GSAP 驱动（见 src/motion.ts），这里只保留少量静态过渡。
+ */
+
+:root {
+  /* ============ 色彩：品牌与强调 ============ */
+  --primary: #707070;
+  --primary-active: #1f1f1f;
+  --primary-disabled: #e5e5e5;
+
+  /*
+   * 注意：这里刻意不再定义 brand-pink / brand-teal / brand-lavender /
+   * brand-peach / brand-ochre / brand-mint / brand-coral 这一整套原色板。
+   * 它们已被下面的「主题色体系」收敛为三个语义色。
+   * 保留整板会让组件有地方随手取色，最终又拼成花里胡哨的样子。
+   */
+
+  /* ============ 色彩：表面 ============ */
+  --canvas: #fffaf0;
+  --surface-soft: #faf5e8;
+  --surface-card: #f5f0e0;
+  --surface-strong: #ebe6d6;
+  --surface-dark: #0a1a1a;
+  --surface-dark-elevated: #1a2a2a;
+  --hairline: #e5e5e5;
+  --hairline-soft: #f0f0f0;
+
+  /* ============ 色彩：文字 ============ */
+  --ink: #0a0a0a;
+  --body-strong: #1a1a1a;
+  --body: #3a3a3a;
+  --muted: #6a6a6a;
+  --muted-soft: #9a9a9a;
+  --on-primary: #ffffff;
+  --on-dark: #ffffff;
+  --on-dark-soft: #a0a0a0;
+
+  /* ============ 语义色 ============ */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+
+  /* ============ 主题色体系 ============
+   *
+   * 全应用只允许三个色相，各自绑定一个固定语义，不再按需取色：
+   *
+   *   --theme        玫瑰    久坐 / 主操作按钮 / 品牌色
+   *   --theme-alt    松绿    站立阶段
+   *   --primary      墨黑    文字与次要结构（不算一个"色相"，是中性色）
+   *
+   * 判断标准：一片颜色面积超过 1/4 屏，就必须用 -surface 版本。
+   * 大面积铺实色一定会从奶油背景里"跳"出来，卡片就变成了贴纸。
+   */
+  --theme: #e05a78;
+  --theme-deep: #b93e58;
+  /*
+   * 卡片底：不再掺任何色相，直接用画布同一族的暖中性色浅一档。
+   * 之前写成玫瑰去饱和版（#f9eef0），在奶油底上依然是一块"淡粉紫"，
+   * 于是整页始终多出一个不请自来的色。阶段信息交给环、圆点、左侧色条表达。
+   */
+  --theme-surface: #faf5e8;
+
+  --theme-alt: #4a7a5e;
+  --theme-alt-deep: #355a45;
+  /* 站立卡只是"另一次循环"，底色与久坐卡一致，仍由左侧色条区分 */
+  --theme-alt-surface: #faf5e8;
+
+  /* 按钮底部的实体投影色：比按钮底色（surface-card #f5f0e0）深一档的暖褐灰。
+     与按钮同色系，不再是中性黑——阴影和按钮分属两个色系会显脏。 */
+  --btn-edge: #d9d0b8;
+
+  /* 折叠态：待机不再单独占一个色相，借用主色。
+     原先的 --theme-idle / -surface / -soft 已随"卡片固定底色"一起删除。 */
+
+  /* 阶段语义色：直接引用上面两个，避免各处自行选色 */
+  --phase-sit: var(--theme);
+  --phase-stand: var(--theme-alt);
+
+  /* ============ 圆角 ============ */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-pill: 9999px;
+
+  /* ============ 间距（4px 基准） ============ */
+  --s-xxs: 4px;
+  --s-xs: 8px;
+  --s-sm: 12px;
+  --s-md: 16px;
+  --s-lg: 24px;
+  --s-xl: 32px;
+  --s-xxl: 48px;
+  --s-section: 96px;
+
+  /* ============ 阴影 ============ */
+  /*
+   * Clay 几乎不用重阴影：深度的第一来源是"底色差"，阴影只是收边。
+   * 因此这里的阴影都很淡，且暖色调（跟画布同一个色系，不用冷灰）。
+   */
+  --shadow-soft: 0 1px 2px rgba(60, 45, 25, 0.05);
+  --shadow-card: 0 1px 2px rgba(60, 45, 25, 0.04), 0 6px 16px rgba(60, 45, 25, 0.06);
+  --shadow-raised: 0 2px 4px rgba(60, 45, 25, 0.05), 0 12px 28px rgba(60, 45, 25, 0.08);
+
+  /* 卡片收边：一层几乎看不见的暖色细线，让浅色卡在浅色画布上仍有轮廓 */
+  --card-edge: inset 0 0 0 1px rgba(60, 45, 25, 0.045);
+
+  /* ============ 字体 ============ */
+  /* 展示字体：圆润实心，替代 Plain Black（授权字体，不可用） */
+  --font-display: 'Nunito', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body: 'Nunito', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* ============ 时间字号 ============
+   * 单个字形的宽度，基于 tabular-nums（数字等宽）+ 相对负字距，
+   * 让"00:00"这种定宽字符串能算出一个固定的视觉宽度。
+   * 计时数字与倒计时条共用它，保证两者左右边缘严格对齐。
+   */
+  --clock-chars: 5;
+  --clock-size: 60px;
+  --clock-tracking: -0.04em;
+  --clock-width: calc(var(--clock-size) * var(--clock-chars) * 0.6 + var(--clock-size) * -0.04 * (var(--clock-chars) - 1));
+
+  /* ============ 静态过渡（非 GSAP 场景） ============ */
+  --t-fast: 130ms;
+  --t-base: 220ms;
+  --t-slow: 420ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 1ms;
+    --t-base: 1ms;
+    --t-slow: 1ms;
+  }
+}
