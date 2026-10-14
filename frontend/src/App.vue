@@ -307,11 +307,17 @@ async function toggleRun() {
   } else if (paused.value) {
     await ResumeTimer()
   } else {
+    // 暂停时若正在响铃，后端会一并停铃并发 ring:stop，
+    // 这里先停一次本地音频，不必等事件往返
+    player.stop()
     await PauseTimer()
   }
 }
 
 async function resetTimer() {
+  // 先停掉本地音频：后端会发 ring:stop 事件，但重置由本函数发起，
+  // 直接停一次更及时，也不必等事件回来
+  player.stop()
   await StopTimer()
 }
 

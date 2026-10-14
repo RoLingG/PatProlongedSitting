@@ -59,6 +59,9 @@ type Timer struct {
 
 	ticker     *time.Ticker
 	stopCh     chan struct{}
+	// dispatchCh 是状态快照的发送队列，由专职 goroutine 串行消费。
+	// 引入它是因为 onTick 里的工作是"通知"性质，不该阻塞计时。
+	dispatchCh chan TimerState
 	onPhaseEnd onPhaseEnd
 	onTick     func(TimerState)
 }
@@ -94,19 +97,35 @@ func (t *Timer) Start() {
 	t.emitLocked()
 }
 
-// Pause 暂停倒计时（响铃不受影响）
-func (t *Timer) Pause() {
+// PauseWithRing 暂停计时，并在响铃时一并停止响铃。
+//
+// 与 SetRinging(false) 的区别：那个会推进到下一阶段，
+// 这个只停铃、保留 pendingPhase，阶段停在原地等用户继续。
+// 用于"暂停"这样一个明确的用户动作——用户要的是停下来，
+// 而不是"把这次提醒消掉、继续往下走"。
+//
+// 返回值表示是否确有响铃被中止，供调用方决定要不要通知前端停音频。
+func (t *Timer) PauseWithRing() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if !t.running || t.paused {
-		return
+	wasRinging := t.ringing
+	if wasRinging {
+		t.ringing = false
+		// ticker 在到点时已停，这里也不重启：阶段要等用户继续才走
 	}
-	t.paused = true
+
+	if t.running && !t.paused {
+		t.paused = true
+	}
+
 	t.emitLocked()
+	return wasRinging
 }
 
-// Resume 恢复倒计时
+// Resume 恢复倒计时。
+// 若暂停时正处在"到点挂起"状态（pendingPhase 非空），则在此推进到下一阶段，
+// 相当于把暂停期间被中止的那次提醒"补"上。
 func (t *Timer) Resume() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -114,11 +133,19 @@ func (t *Timer) Resume() {
 	if !t.running || !t.paused {
 		return
 	}
-	// 响铃期间倒计时本就不走，恢复要等停止响铃（见 SetRinging）
-	if t.ringing {
-		return
-	}
 	t.paused = false
+
+	if t.pendingPhase != "" {
+		next := t.pendingPhase
+		t.pendingPhase = ""
+		t.phase = next
+		t.total = t.phaseDurationLocked(next)
+		t.remaining = t.total
+		if t.stopCh == nil {
+			t.spawnLocked()
+		}
+	}
+
 	t.emitLocked()
 }
 
@@ -167,14 +194,6 @@ func (t *Timer) Stop() {
 }
 
 // SetRinging 更新响铃状态，用于前端同步
-//
-// 停止响铃（v=false）时，如果有一个因到点而挂起的下一阶段，
-// 就从此处推进：切换阶段、按新时长从头开始，并让倒计时继续跑。
-// SetRinging 更新响铃状态。
-//
-// 由响铃转为不响铃时，若存在挂起的下一阶段，就在此处推进它：
-// 切换阶段、按新时长从头计时。"响铃期间不计时"这条规则由计时器
-// 统一保证，前端只需调 SetRinging(false)，不必自己判断该 Start 还是 Resume。
 func (t *Timer) SetRinging(v bool) {
 	t.mu.Lock()
 
@@ -203,11 +222,8 @@ func (t *Timer) SetRinging(v bool) {
 // emit 推送一次状态快照（自行加锁，供未持锁的公开方法使用）
 func (t *Timer) emit() {
 	t.mu.Lock()
-	state := t.stateLocked()
-	t.mu.Unlock()
-	if t.onTick != nil {
-		t.onTick(state)
-	}
+	defer t.mu.Unlock()
+	t.dispatchLocked(t.stateLocked())
 }
 
 // ResetCounters 清零已完成循环数与提醒次数（配置变更后调用）
@@ -245,10 +261,33 @@ func (t *Timer) phaseDurationLocked(p Phase) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// spawnLocked 启动 ticker goroutine，调用方必须持有锁
+// dispatchLocked 把状态快照投递给发送队列，调用方必须持有锁。
+//
+// 不直接调用 onTick：它要做发事件、改托盘、改窗口标题，
+// 这些都比计时本身慢，同步调用会拖住 ticker goroutine 影响计时精度。
+// 投递到队列后由专职 goroutine 串行发送，既不阻塞计时，也保证先后顺序。
+func (t *Timer) dispatchLocked(state TimerState) {
+	if t.onTick == nil {
+		return
+	}
+	// 没有发送 goroutine 时（尚未启动或已停止）现起一个：
+	// 推送状态这件事任何时刻都要能工作，不该依赖计时器是否在跑，
+	// 否则 Stop() 之后前端收不到最终状态，界面会停在旧样子。
+	t.startDispatchLocked()
+
+	select {
+	case t.dispatchCh <- state:
+	default:
+		// 队列满说明发送端积压。丢弃当前这条而不是阻塞计时——
+		// 下一次推送会带来更新的状态，旧状态本来也没有保留价值。
+	}
+}
+
+// spawnLocked 启动 ticker 与发送 goroutine，调用方必须持有锁
 func (t *Timer) spawnLocked() {
 	t.ticker = time.NewTicker(time.Second)
 	t.stopCh = make(chan struct{})
+	t.startDispatchLocked()
 
 	ticker := t.ticker
 	stopCh := t.stopCh
@@ -265,7 +304,8 @@ func (t *Timer) spawnLocked() {
 	}()
 }
 
-// stopLocked 关闭 ticker 与信号通道，调用方必须持有锁
+// stopLocked 关闭 ticker 与信号通道，调用方必须持有锁。
+// 若关掉 dispatchCh，发送 goroutine 会在排空队列后自然退出。
 func (t *Timer) stopLocked() {
 	if t.stopCh != nil {
 		close(t.stopCh)
@@ -275,6 +315,30 @@ func (t *Timer) stopLocked() {
 		t.ticker.Stop()
 		t.ticker = nil
 	}
+	t.closeDispatchLocked()
+}
+
+// closeDispatchLocked 关闭发送队列并置空，调用方必须持有锁。
+// 调用后 dispatchLocked 会转为直接投递（无发送 goroutine 时仍要能推送状态）。
+func (t *Timer) closeDispatchLocked() {
+	if t.dispatchCh != nil {
+		close(t.dispatchCh)
+		t.dispatchCh = nil
+	}
+}
+
+// startDispatchLocked 确保发送 goroutine 在运行，调用方必须持有锁
+func (t *Timer) startDispatchLocked() {
+	if t.dispatchCh != nil {
+		return
+	}
+	t.dispatchCh = make(chan TimerState, 4)
+	dispatchCh := t.dispatchCh
+	go func() {
+		for state := range dispatchCh {
+			t.onTick(state)
+		}
+	}()
 }
 
 // tick 每秒推进一次倒计时
@@ -289,11 +353,8 @@ func (t *Timer) tick() {
 	t.remaining -= time.Second
 
 	if t.remaining > 0 {
-		state := t.stateLocked()
+		t.dispatchLocked(t.stateLocked())
 		t.mu.Unlock()
-		if t.onTick != nil {
-			t.onTick(state)
-		}
 		return
 	}
 
@@ -336,9 +397,7 @@ func (t *Timer) tick() {
 	if t.onPhaseEnd != nil {
 		t.onPhaseEnd(ended, next, state)
 	}
-	if t.onTick != nil {
-		t.onTick(state)
-	}
+	t.dispatchLocked(state)
 }
 
 // stateLocked 组装状态快照，调用方必须持有锁
@@ -357,11 +416,7 @@ func (t *Timer) stateLocked() TimerState {
 
 // emitLocked 推送状态到前端，调用方必须持有锁
 func (t *Timer) emitLocked() {
-	if t.onTick == nil {
-		return
-	}
-	state := t.stateLocked()
-	go t.onTick(state)
+	t.dispatchLocked(t.stateLocked())
 }
 
 // WaitDone 阻塞直到计时器被完全停止，用于优雅退出

@@ -190,7 +190,7 @@ func TestPauseResume(t *testing.T) {
 	timer := NewTimer(cfg, nil, nil)
 	timer.Start()
 
-	timer.Pause()
+	timer.PauseWithRing()
 	if !timer.State().Paused {
 		t.Fatal("暂停后 Paused 应为 true")
 	}

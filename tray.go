@@ -2,19 +2,21 @@ package main
 
 import (
 	_ "embed"
+	"runtime"
+	"sync"
 
 	"github.com/energye/systray"
 )
 
 // trayIcon 是内置的托盘图标（16x16 ICO）
-// 使用 go:embed 保证单文件分发时图标不丢失
 //
-//go:embed build/windows/icon.ico
+//go:embed frontend/src/assets/images/icon.ico
 var trayIcon []byte
 
 // TrayCallbacks 汇总托盘菜单各动作对应的回调
 type TrayCallbacks struct {
 	OnToggleTimer func()        // 开始 / 暂停 / 继续
+	OnResetTimer  func()        // 停止计时并重置
 	OnStopRing    func()        // 停止响铃
 	OnShowWindow  func()        // 打开主界面
 	OnQuit        func()        // 退出程序
@@ -26,7 +28,11 @@ type TrayCallbacks struct {
 type Tray struct {
 	cb TrayCallbacks
 
+	// mu 串行化对托盘控件的修改
+	mu sync.Mutex
+
 	mStart    *systray.MenuItem
+	mReset    *systray.MenuItem
 	mStopRing *systray.MenuItem
 	mShow     *systray.MenuItem
 	mQuit     *systray.MenuItem
@@ -40,6 +46,12 @@ func NewTray(cb TrayCallbacks) *Tray {
 
 // Run 启动托盘，该函数会阻塞，必须在独立 goroutine 中调用
 func (t *Tray) Run() {
+	// Win32 的窗口消息队列属于创建窗口的那个线程，而 Go 的 goroutine 会在
+	// OS 线程间迁移。若消息循环被迁走，就再也收不到该窗口的消息，
+	// 表现为托盘点击永久无响应。故在此锁定线程。
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	systray.Run(t.onReady, t.onExit)
 }
 
@@ -71,6 +83,7 @@ func (t *Tray) onReady() {
 	systray.AddSeparator()
 
 	t.mStart = systray.AddMenuItem("开始", "开始 / 暂停 / 继续计时")
+	t.mReset = systray.AddMenuItem("重置", "停止计时并回到未启动")
 	t.mStopRing = systray.AddMenuItem("停止响铃", "立即停止当前提示音")
 	t.mStopRing.Disable()
 
@@ -82,6 +95,11 @@ func (t *Tray) onReady() {
 	t.mStart.Click(func() {
 		if t.cb.OnToggleTimer != nil {
 			t.cb.OnToggleTimer()
+		}
+	})
+	t.mReset.Click(func() {
+		if t.cb.OnResetTimer != nil {
+			t.cb.OnResetTimer()
 		}
 	})
 	t.mStopRing.Click(func() {
@@ -112,6 +130,9 @@ func (t *Tray) onExit() {
 
 // Update 根据最新状态刷新托盘菜单文案与可用性
 func (t *Tray) Update(state TimerState, statusText string, startLabel string, ringing bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.mStatus == nil {
 		return
 	}

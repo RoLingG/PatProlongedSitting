@@ -53,6 +53,7 @@ func NewApp() *App {
 	a.timer = NewTimer(cfg, a.onPhaseEnd, a.onTick)
 	a.tray = NewTray(TrayCallbacks{
 		OnToggleTimer: a.ToggleTimer,
+		OnResetTimer:  a.StopTimer,
 		OnStopRing:    a.StopRing,
 		OnShowWindow:  a.ShowWindow,
 		OnQuit:        a.Quit,
@@ -118,9 +119,11 @@ func (a *App) StartTimer() {
 	a.pushState()
 }
 
-// PauseTimer 暂停倒计时
+// PauseTimer 暂停倒计时；若正在响铃，一并停止响铃
 func (a *App) PauseTimer() {
-	a.timer.Pause()
+	if a.timer.PauseWithRing() {
+		a.emit(EventStopRing, nil)
+	}
 	a.pushState()
 }
 
@@ -130,9 +133,14 @@ func (a *App) ResumeTimer() {
 	a.pushState()
 }
 
-// StopTimer 停止计时并回到未启动状态
+// StopTimer 停止计时并回到未启动状态。
+// 若正在响铃会一并通知前端停掉提示音，避免出现计时已停、声音仍在响的错位状态。
 func (a *App) StopTimer() {
+	ringing := a.timer.State().Ringing
 	a.timer.Stop()
+	if ringing {
+		a.emit(EventStopRing, nil)
+	}
 	a.pushState()
 }
 
@@ -145,7 +153,9 @@ func (a *App) ToggleTimer() {
 	case s.Paused:
 		a.timer.Resume()
 	default:
-		a.timer.Pause()
+		if a.timer.PauseWithRing() {
+			a.emit(EventStopRing, nil)
+		}
 	}
 	a.pushState()
 }
